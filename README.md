@@ -1,6 +1,6 @@
 # Contribution Board
 
-Ta grille de contributions GitHub racontée autrement : pas un graphique statique, mais une petite scène qui rejoue tes vrais commits — un canon qui vise, une marée qui découvre des coquillages, un sonar qui détecte, une pluie de météores qui s'écrase, un jardin qui pousse, un rayon laser qui balaie. Chaque style lit les mêmes données réelles (l'API GraphQL de GitHub), juste mises en scène différemment.
+Ta grille de contributions GitHub racontée autrement : pas un graphique statique, mais une petite scène qui rejoue tes vrais commits — un canon qui vise, une marée qui découvre des coquillages, un sonar qui détecte, une pluie de météores qui s'écrase, un jardin qui pousse, un rayon laser qui balaie, un serpent qui avale tes commits. Chaque style lit les mêmes données réelles (l'API GraphQL de GitHub), juste mises en scène différemment.
 
 Zéro dépendance externe (Node 20+, `fetch` global), self-hosted via GitHub Action — pas d'instance tierce qui peut tomber en panne, tout tourne chez toi.
 
@@ -14,6 +14,7 @@ Zéro dépendance externe (Node 20+, `fetch` global), self-hosted via GitHub Act
 | `garden` | Toute la grille devient un lit de terre ; chaque jour actif fait pousser une plante différente selon son niveau d'activité — herbe, fleur, puis arbre — dans l'ordre chronologique, comme un vrai jardin sur la saison. |
 | `laser` | Un rayon ancré en haut à gauche balaie chaque colonne active ligne par ligne (droite à gauche), pleine longueur tant qu'il ne touche rien, raccourci pile sur le premier commit rencontré — visité ou déjà allumé — qui devient alors un carré plein. |
 | `breakout` | Une plaque verticale à gauche, mobile, poursuit une balle qui rebondit sur les murs et casse chaque jour actif percuté, comme un casse-brique. |
+| `snake` | Un serpent file vers le commit le plus proche et le mange, sans jamais grandir, jusqu'à avoir tout avalé. |
 
 ## Démos
 
@@ -26,6 +27,7 @@ Zéro dépendance externe (Node 20+, `fetch` global), self-hosted via GitHub Act
 | [`garden`](src/styles/garden.mjs) | <img src="docs/demo-garden.svg" width="360"> | Toute la grille devient un lit de terre ; chaque jour actif fait pousser une plante selon son niveau d'activité (herbe → fleur → arbre), dans l'ordre chronologique, jusqu'à pleine floraison puis fanaison avant la boucle suivante. |
 | [`laser`](src/styles/laser.mjs) | <img src="docs/demo-laser.svg" width="360"> | Un rayon ancré en haut à gauche balaie chaque colonne active ligne par ligne, du plus récent au plus ancien. Pleine longueur jusqu'au bord de la grille tant que rien ne l'arrête, raccourci pile sur le premier commit rencontré (visité ou déjà allumé) qui devient alors un carré plein. |
 | [`breakout`](src/styles/breakout.mjs) | <img src="docs/demo-breakout.svg" width="360"> | Une plaque verticale à gauche poursuit une balle qui rebondit sur les murs et sur elle-même, cassant chaque jour actif percuté au premier impact, comme un casse-brique. |
+| [`snake`](src/styles/snake.mjs) | <img src="docs/demo-snake.svg" width="360"> | Un serpent file vers le commit le plus proche (plus court chemin, sans traverser son corps) et le mange, sans jamais grandir : il garde toujours la même longueur. |
 
 Les aperçus ci-dessus sont générés depuis de vraies données (voir [Développement local](#développement-local) pour les régénérer) — GitHub anime les SVG normalement dans le rendu du README, pas besoin de GIF.
 
@@ -51,7 +53,7 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           username: ${{ github.repository_owner }}
-          style: cannon # ou tide / sonar / meteor / constellation / garden / laser / breakout
+          style: cannon # ou tide / sonar / meteor / constellation / garden / laser / breakout / snake
           output: assets/contribution-board.svg
       - run: |
           if [[ -n "$(git status --porcelain assets/contribution-board.svg)" ]]; then
