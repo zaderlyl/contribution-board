@@ -1,6 +1,8 @@
-// Style "snake" : un serpent traverse la grille et mange chaque jour actif.
-// À chaque pas il file vers le commit non mangé le plus proche (plus court
-// chemin, sans traverser son propre corps). Sa longueur reste constante.
+// Style "snake" : un serpent mange les jours actifs du moins chargé au plus
+// chargé (1 commit d'abord, les plus gros jours à la fin). Entre deux
+// commits il suit un trajet pseudo-aléatoire (déterministe : même données,
+// même parcours) qui se rapproche de sa cible sans jamais se mordre la queue
+// ni faire demi-tour. À nombre de commits égal, il enchaîne le plus proche.
 // La simulation tourne une fois à la génération, puis est convertie en
 // animation CSS : la tête avance à vitesse constante (une case par pas),
 // donc l'interpolation `linear` reproduit exactement le mouvement, et
@@ -14,9 +16,9 @@ export const meta = {
   description: "Un serpent file vers le commit le plus proche et le mange, sans jamais grandir, jusqu'à avoir tout avalé.",
 };
 
-const STEP = 0.18;        // s par case parcourue (lent : ~5,5 cases/s)
-const MAX_STEPS = 6000;   // garde-fou
-const START_LEN = 4;      // longueur, constante (tête + 3 segments)
+const MAX_STEP = 0.18;    // s par case parcourue, au plus (lent : ~5,5 cases/s)
+const MIN_STEP = 0.05;    // s par case parcourue, au moins
+const TARGET_CYCLE = 70;  // s, durée visée pour une boucle : le pas s'adapte pour y tenir
 const HOLD = 1.0;         // s, pause avant la remise à zéro
 const RESET_DUR = 0.5;    // s, le serpent disparaît et les commits reviennent
 const SEGMENTS = 3;       // segments derrière la tête
@@ -24,116 +26,99 @@ const SEG_LAG = 1;        // retard de chaque segment sur le précédent, en pas
 const SNAKE_COLOR = "#e0e0e0";
 const BAR_H = 5;          // hauteur de la barre de progression
 const BAR_GAP = 8;        // espace entre la grille et la barre
-const DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+
+// PRNG déterministe (mulberry32) : le parcours ne change pas d'un jour à l'autre
+// tant que les données ne changent pas.
+function makeRng(seed) {
+  let t = seed >>> 0;
+  return () => {
+    t += 0x6d2b79f5;
+    let x = Math.imul(t ^ (t >>> 15), 1 | t);
+    x ^= x + Math.imul(x ^ (x >>> 7), 61 | x);
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+const WANDER = 0.18; // probabilité de faire un pas qui ne rapproche pas de la cible
 
 function simulate(days, cols) {
   const key = (c, r) => c * 7 + r;
-  const food = new Map(days.filter((d) => d.count > 0).map((d) => [key(d.col, d.row), d]));
+  const rng = makeRng(days.reduce((n, d) => (n * 31 + d.count + 7) | 0, cols));
   const inGrid = (c, r) => c >= 0 && c < cols && r >= 0 && r < 7;
+  const food = new Map(days.filter((d) => d.count > 0).map((d) => [key(d.col, d.row), d]));
 
-  let head = { c: 0, r: 3 };
-  const body = [{ ...head }]; // du plus ancien (queue) au plus récent (tête)
-  const occ = new Set([key(head.c, head.r)]);
-  const heads = [{ ...head }];          // position de la tête à chaque pas
-  const eats = [];                      // { step, day }
-  const enters = new Map();             // case -> instants d'entrée (pas)
-  const leaves = new Map();             // case -> instants de sortie (pas)
-  const push = (m, k, v) => { if (!m.has(k)) m.set(k, []); m.get(k).push(v); };
-  push(enters, key(head.c, head.r), 0);
-  let grow = START_LEN - 1;
-
-  // Cases libres atteignables depuis `from` (pour choisir un cul-de-sac le moins
-  // mauvais quand aucun commit n'est atteignable).
-  const reachable = (from, blocked) => {
-    const seen = new Set([key(from.c, from.r)]);
-    const q = [from];
-    while (q.length) {
-      const p = q.pop();
-      for (const [dc, dr] of DIRS) {
-        const c = p.c + dc, r = p.r + dr, k = key(c, r);
-        if (!inGrid(c, r) || seen.has(k) || blocked.has(k)) continue;
-        seen.add(k); q.push({ c, r });
-      }
-    }
-    return seen.size;
+  const heads = [{ c: 0, r: 3 }];
+  const eats = [];
+  const eatAt = (c, r, step) => {
+    const k = key(c, r);
+    if (food.has(k)) { eats.push({ step, day: food.get(k) }); food.delete(k); }
   };
 
-  const release = (step, cell) => {
-    occ.delete(key(cell.c, cell.r));
-    push(leaves, key(cell.c, cell.r), step);
-  };
-
-  let step = 0, shrinks = 0;
-  while (food.size > 0 && step < MAX_STEPS) {
-    const tail = body[0];
-    const tailK = key(tail.c, tail.r);
-    // La queue libère sa case au même pas, sauf si on grandit.
-    const blocked = new Set(occ);
-    if (grow === 0) blocked.delete(tailK);
-
-    // BFS vers le commit le plus proche.
-    const prev = new Map([[key(head.c, head.r), null]]);
-    const queue = [head];
-    let goal = null;
-    for (let i = 0; i < queue.length && !goal; i++) {
-      const p = queue[i];
-      for (const [dc, dr] of DIRS) {
-        const c = p.c + dc, r = p.r + dr, k = key(c, r);
-        if (!inGrid(c, r) || prev.has(k) || blocked.has(k)) continue;
-        prev.set(k, p);
-        if (food.has(k)) { goal = { c, r }; break; }
-        queue.push({ c, r });
-      }
+  // Ordre de visite : nombre de commits croissant, puis plus proche voisin.
+  const byCount = new Map();
+  for (const d of food.values()) {
+    if (!byCount.has(d.count)) byCount.set(d.count, []);
+    byCount.get(d.count).push(d);
+  }
+  const order = [];
+  let cur = heads[0];
+  for (const count of [...byCount.keys()].sort((a, b) => a - b)) {
+    const rest = [...byCount.get(count)];
+    while (rest.length) {
+      let best = 0, bestD = Infinity;
+      rest.forEach((d, i) => {
+        const dist = Math.abs(d.col - cur.c) + Math.abs(d.row - cur.r) + rng() * 0.5;
+        if (dist < bestD) { bestD = dist; best = i; }
+      });
+      const [d] = rest.splice(best, 1);
+      order.push(d);
+      cur = { c: d.col, r: d.row };
     }
-
-    let next = null;
-    if (goal) {
-      let p = goal, back = null;
-      while (prev.get(key(p.c, p.r))) { back = p; p = prev.get(key(p.c, p.r)); }
-      next = back;
-    } else {
-      // Aucun commit atteignable : on prend la case libre la plus ouverte.
-      let best = -1;
-      for (const [dc, dr] of DIRS) {
-        const c = head.c + dc, r = head.r + dr, k = key(c, r);
-        if (!inGrid(c, r) || blocked.has(k)) continue;
-        const room = reachable({ c, r }, new Set([...blocked, key(head.c, head.r)]));
-        if (room > best) { best = room; next = { c, r }; }
-      }
-    }
-
-    if (!next) {
-      // Enfermé : le serpent se raccourcit à sa longueur de départ et repart.
-      shrinks++;
-      while (body.length > START_LEN) release(step, body.shift());
-      grow = 0;
-      if (shrinks > 200) break;
-      continue;
-    }
-
-    step++;
-    const nk = key(next.c, next.r);
-    if (grow > 0) grow--;
-    else release(step, body.shift());
-    head = next;
-    body.push({ ...head });
-    occ.add(nk);
-    push(enters, nk, step);
-    heads.push({ ...head });
-    if (food.has(nk)) { eats.push({ step, day: food.get(nk) }); food.delete(nk); }
   }
 
-  // Ce qu'il reste du serpent disparaît à la fin de la simulation.
-  const endStep = step;
-  for (const cell of body) push(leaves, key(cell.c, cell.r), endStep + HOLD / STEP);
-  return { heads, eats, enters, leaves, endStep, key };
+  for (const target of order) {
+    let guard = 0;
+    for (;;) {
+      const head = heads[heads.length - 1];
+      if (head.c === target.col && head.r === target.row) break;
+      const prev1 = heads[heads.length - 2], prev2 = heads[heads.length - 3];
+      const is = (p, c, r) => p && p.c === c && p.r === r;
+      const moves = DIRS.map(([dc, dr]) => ({ c: head.c + dc, r: head.r + dr }))
+        .filter((m) => inGrid(m.c, m.r));
+      // Pas de demi-tour ni de retour dans le corps ; sinon, au pire, n'importe quoi.
+      let cands = moves.filter((m) => !is(prev1, m.c, m.r) && !is(prev2, m.c, m.r));
+      if (!cands.length) cands = moves.filter((m) => !is(prev1, m.c, m.r));
+      if (!cands.length) cands = moves;
+      // Le serpent peut passer par-dessus un autre commit sans le manger : seul
+      // celui dont c'est le tour disparaît, ce qui garantit l'ordre croissant.
+      const dx = target.col - head.c, dy = target.row - head.r;
+      const dist = (m) => Math.abs(target.col - m.c) + Math.abs(target.row - m.r);
+      const toward = cands.filter((m) => dist(m) < Math.abs(dx) + Math.abs(dy));
+
+      let pick;
+      if (toward.length && (++guard > 80 || rng() > WANDER)) {
+        // Choix pondéré par la distance restante sur chaque axe : trajet en escalier.
+        const w = toward.map((m) => (m.c !== head.c ? Math.abs(dx) : Math.abs(dy)));
+        let x = rng() * w.reduce((a, b) => a + b, 0);
+        pick = toward[w.findIndex((v) => (x -= v) < 0)] ?? toward[0];
+      } else {
+        pick = cands[Math.floor(rng() * cands.length)];
+      }
+      heads.push({ c: pick.c, r: pick.r });
+      if (pick.c === target.col && pick.r === target.row) eatAt(pick.c, pick.r, heads.length - 1);
+    }
+  }
+
+  return { heads, eats, endStep: heads.length - 1 };
 }
 
 export function render(days, opts = {}) {
   const accent = `#${(opts.accent ?? "ff9100").replace(/^#/, "")}`;
   const bg = opts.background ?? "#0d1117";
   const g = gridGeometry(days, { top: 8, left: 8, right: 8, bottom: 8 + BAR_GAP + BAR_H });
-  const { heads, eats, enters, leaves, endStep, key } = simulate(days, g.cols);
+  const { heads, eats, endStep } = simulate(days, g.cols);
+  const STEP = Math.max(MIN_STEP, Math.min(MAX_STEP, TARGET_CYCLE / Math.max(endStep, 1)));
 
   const simEnd = endStep * STEP;
   const holdEnd = simEnd + HOLD;
