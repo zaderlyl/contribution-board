@@ -4,8 +4,7 @@
 // La simulation tourne une fois à la génération, puis est convertie en
 // animation CSS : la tête avance à vitesse constante (une case par pas),
 // donc l'interpolation `linear` reproduit exactement le mouvement, et
-// chaque case du corps s'allume/s'éteint aux instants exacts où le
-// serpent la couvre.
+// le corps suit la tête avec un léger retard.
 
 import { LEVEL_COLOR, gridGeometry } from "../lib/contributions.mjs";
 
@@ -15,11 +14,13 @@ export const meta = {
   description: "Un serpent file vers le commit le plus proche et le mange, sans jamais grandir, jusqu'à avoir tout avalé.",
 };
 
-const STEP = 0.07;        // s par case parcourue
+const STEP = 0.18;        // s par case parcourue (lent : ~5,5 cases/s)
 const MAX_STEPS = 6000;   // garde-fou
 const START_LEN = 3;      // longueur, constante
 const HOLD = 1.0;         // s, pause avant la remise à zéro
 const RESET_DUR = 0.5;    // s, le serpent disparaît et les commits reviennent
+const SEGMENTS = 6;       // éléments qui dessinent le corps
+const SEG_LAG = 0.5;      // retard de chaque élément sur le précédent, en pas
 const DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]];
 
 function simulate(days, cols) {
@@ -137,7 +138,7 @@ export function render(days, opts = {}) {
   const pct = (s) => ((s / cycleEnd) * 100).toFixed(3);
   const cx = (c) => g.cellX(c) + g.CELL / 2;
   const cy = (r) => g.cellY(r) + g.CELL / 2;
-  const EPS = 0.01;
+  const EPS = 0.12; // s, fondu de disparition d'un commit mangé
 
   let cellRects = "";
   days.forEach((d) => {
@@ -165,24 +166,6 @@ export function render(days, opts = {}) {
     foodEls += `<rect x="${x}" y="${y}" width="${g.CELL}" height="${g.CELL}" rx="2" fill="${color}" style="animation: f${i} ${cycleEnd.toFixed(2)}s linear infinite;"/>\n`;
   });
 
-  // Corps : chaque case visitée s'allume entre l'entrée de la tête et la
-  // sortie de la queue (une même case peut être couverte plusieurs fois).
-  let bodyEls = "";
-  for (const [k, ins] of enters) {
-    const outs = leaves.get(k) ?? [];
-    const col = Math.floor(k / 7), row = k % 7;
-    let kf = "0% { opacity: 0; }\n";
-    ins.forEach((s, j) => {
-      const tIn = s * STEP;
-      const tOut = (outs[j] ?? endStep + HOLD / STEP) * STEP;
-      kf += `${pct(Math.max(0, tIn - EPS))}% { opacity: 0; }\n${pct(tIn)}% { opacity: 1; }\n`;
-      kf += `${pct(tOut)}% { opacity: 1; }\n${pct(tOut + EPS)}% { opacity: 0; }\n`;
-    });
-    kf += "100% { opacity: 0; }\n";
-    keyframes += `@keyframes b${k} { ${kf} }\n`;
-    bodyEls += `<rect x="${g.cellX(col) + 1}" y="${g.cellY(row) + 1}" width="${g.CELL - 2}" height="${g.CELL - 2}" rx="2.5" fill="${accent}" style="opacity: 0; animation: b${k} ${cycleEnd.toFixed(2)}s linear infinite;"/>\n`;
-  }
-
   // Tête : vitesse constante, on ne garde un point d'arrêt que là où la
   // direction change (l'interpolation linéaire fait le reste).
   let headKf = `0% { transform: translate(${cx(heads[0].c).toFixed(1)}px,${cy(heads[0].r).toFixed(1)}px); opacity: 1; }\n`;
@@ -196,16 +179,26 @@ export function render(days, opts = {}) {
   headKf += `${pct(holdEnd + 0.2)}% { transform: translate(${cx(last.c).toFixed(1)}px,${cy(last.r).toFixed(1)}px); opacity: 0; }\n`;
   headKf += `100% { transform: translate(${cx(heads[0].c).toFixed(1)}px,${cy(heads[0].r).toFixed(1)}px); opacity: 0; }\n`;
 
+  // Le corps est fait de petits éléments qui suivent exactement le même
+  // chemin que la tête, avec un léger retard chacun : le serpent épouse les
+  // virages en continu au lieu de s'allumer case par case.
+  let snakeEls = "";
+  for (let i = SEGMENTS; i >= 0; i--) {
+    const size = i === 0 ? 10 : 9 - (i / SEGMENTS) * 4;
+    const fill = i === 0 ? "#ffe3b3" : accent;
+    const delay = (i * SEG_LAG * STEP).toFixed(3);
+    snakeEls += `<rect x="${-size / 2}" y="${-size / 2}" width="${size.toFixed(1)}" height="${size.toFixed(1)}" rx="${(size / 3).toFixed(1)}" fill="${fill}" style="animation: head ${cycleEnd.toFixed(2)}s linear ${delay}s infinite backwards;"/>\n`;
+  }
+
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${g.width}" height="${g.height}" viewBox="0 0 ${g.width} ${g.height}">
 <style>
-rect { shape-rendering: crispEdges; }
+rect { shape-rendering: geometricPrecision; }
 @keyframes head { ${headKf} }
 ${keyframes}
 </style>
 <rect width="${g.width}" height="${g.height}" fill="${bg}"/>
 ${cellRects}
 ${foodEls}
-${bodyEls}
-<rect x="-5" y="-5" width="10" height="10" rx="3" fill="#ffe3b3" style="animation: head ${cycleEnd.toFixed(2)}s linear infinite;"/>
+${snakeEls}
 </svg>`;
 }
