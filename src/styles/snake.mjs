@@ -4,7 +4,7 @@
 // La simulation tourne une fois à la génération, puis est convertie en
 // animation CSS : la tête avance à vitesse constante (une case par pas),
 // donc l'interpolation `linear` reproduit exactement le mouvement, et
-// le corps suit la tête avec un léger retard.
+// le corps (4 segments) suit la tête case par case.
 
 import { LEVEL_COLOR, gridGeometry } from "../lib/contributions.mjs";
 
@@ -16,11 +16,14 @@ export const meta = {
 
 const STEP = 0.18;        // s par case parcourue (lent : ~5,5 cases/s)
 const MAX_STEPS = 6000;   // garde-fou
-const START_LEN = 3;      // longueur, constante
+const START_LEN = 4;      // longueur, constante (tête + 3 segments)
 const HOLD = 1.0;         // s, pause avant la remise à zéro
 const RESET_DUR = 0.5;    // s, le serpent disparaît et les commits reviennent
-const SEGMENTS = 6;       // éléments qui dessinent le corps
-const SEG_LAG = 0.5;      // retard de chaque élément sur le précédent, en pas
+const SEGMENTS = 3;       // segments derrière la tête
+const SEG_LAG = 1;        // retard de chaque segment sur le précédent, en pas (= une case)
+const SNAKE_COLOR = "#e0e0e0";
+const BAR_H = 5;          // hauteur de la barre de progression
+const BAR_GAP = 8;        // espace entre la grille et la barre
 const DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]];
 
 function simulate(days, cols) {
@@ -129,7 +132,7 @@ function simulate(days, cols) {
 export function render(days, opts = {}) {
   const accent = `#${(opts.accent ?? "ff9100").replace(/^#/, "")}`;
   const bg = opts.background ?? "#0d1117";
-  const g = gridGeometry(days, { top: 8, left: 8, right: 8, bottom: 8 });
+  const g = gridGeometry(days, { top: 8, left: 8, right: 8, bottom: 8 + BAR_GAP + BAR_H });
   const { heads, eats, enters, leaves, endStep, key } = simulate(days, g.cols);
 
   const simEnd = endStep * STEP;
@@ -179,15 +182,45 @@ export function render(days, opts = {}) {
   headKf += `${pct(holdEnd + 0.2)}% { transform: translate(${cx(last.c).toFixed(1)}px,${cy(last.r).toFixed(1)}px); opacity: 0; }\n`;
   headKf += `100% { transform: translate(${cx(heads[0].c).toFixed(1)}px,${cy(heads[0].r).toFixed(1)}px); opacity: 0; }\n`;
 
-  // Le corps est fait de petits éléments qui suivent exactement le même
-  // chemin que la tête, avec un léger retard chacun : le serpent épouse les
-  // virages en continu au lieu de s'allumer case par case.
+  // Barre de progression : un tronçon par série de commits de même niveau
+  // (couleur du niveau), qui se remplit en continu à mesure que le serpent
+  // mange, puis se vide pendant la remise à zéro.
+  const totalEaten = eats.length;
+  const barY = g.PAD_TOP + g.gridHeight + BAR_GAP;
+  let barEls = "";
+  if (totalEaten > 0) {
+    const groups = [];
+    eats.forEach((e) => {
+      const last = groups[groups.length - 1];
+      if (last && last.level === e.day.level) last.times.push(e.step * STEP);
+      else groups.push({ level: e.day.level, times: [e.step * STEP], first: groups.reduce((n, x) => n + x.times.length, 0) });
+    });
+    let prevT = 0;
+    groups.forEach((grp, gi) => {
+      const x = g.PAD_LEFT + (grp.first / totalEaten) * g.gridWidth;
+      const w = (grp.times.length / totalEaten) * g.gridWidth;
+      const color = LEVEL_COLOR[grp.level] ?? accent;
+      let kf = `0% { transform: scaleX(0); }\n${pct(prevT)}% { transform: scaleX(0); }\n`;
+      grp.times.forEach((t, k) => {
+        kf += `${pct(t)}% { transform: scaleX(${((k + 1) / grp.times.length).toFixed(3)}); }\n`;
+      });
+      kf += `${pct(holdEnd)}% { transform: scaleX(1); }\n100% { transform: scaleX(0); }\n`;
+      keyframes += `@keyframes bar${gi} { ${kf} }\n`;
+      barEls += `<rect x="${x.toFixed(1)}" y="${barY}" width="${w.toFixed(1)}" height="${BAR_H}" fill="${color}" style="transform: scaleX(0); transform-box: fill-box; transform-origin: left center; animation: bar${gi} ${cycleEnd.toFixed(2)}s linear infinite;"/>\n`;
+      prevT = grp.times[grp.times.length - 1];
+    });
+  }
+
+  // Le serpent : 4 éléments gris clair qui rapetissent vers la queue et
+  // suivent exactement le chemin de la tête, chacun une case derrière le
+  // précédent — il épouse les virages comme dans snk.
+  const SCALE = g.PITCH / 16;
+  const SIZES = [14.4, 12.3, 10.8, 9.9].map((v) => v * SCALE);
   let snakeEls = "";
   for (let i = SEGMENTS; i >= 0; i--) {
-    const size = i === 0 ? 10 : 9 - (i / SEGMENTS) * 4;
-    const fill = i === 0 ? "#ffe3b3" : accent;
+    const size = SIZES[Math.min(i, SIZES.length - 1)];
     const delay = (i * SEG_LAG * STEP).toFixed(3);
-    snakeEls += `<rect x="${-size / 2}" y="${-size / 2}" width="${size.toFixed(1)}" height="${size.toFixed(1)}" rx="${(size / 3).toFixed(1)}" fill="${fill}" style="animation: head ${cycleEnd.toFixed(2)}s linear ${delay}s infinite backwards;"/>\n`;
+    snakeEls += `<rect x="${(-size / 2).toFixed(2)}" y="${(-size / 2).toFixed(2)}" width="${size.toFixed(2)}" height="${size.toFixed(2)}" rx="${(size * 0.31).toFixed(2)}" fill="${SNAKE_COLOR}" style="animation: head ${cycleEnd.toFixed(2)}s linear ${delay}s infinite backwards;"/>\n`;
   }
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${g.width}" height="${g.height}" viewBox="0 0 ${g.width} ${g.height}">
@@ -199,6 +232,6 @@ ${keyframes}
 <rect width="${g.width}" height="${g.height}" fill="${bg}"/>
 ${cellRects}
 ${foodEls}
-${snakeEls}
+${barEls}${snakeEls}
 </svg>`;
 }
