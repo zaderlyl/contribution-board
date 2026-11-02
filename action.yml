@@ -1,5 +1,5 @@
-name: "Contribution Board"
-description: "Anime ta grille de contributions GitHub avec des visuels originaux (canon, et d'autres à venir) plutôt qu'un simple graphique."
+name: "Contribution Graph Animation for Profile README"
+description: "Animated SVG contribution graph for your GitHub profile README: original animations (cannon, more to come) instead of a plain contribution grid."
 branding:
   icon: "target"
   color: "orange"
